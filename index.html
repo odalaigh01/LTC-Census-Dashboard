@@ -53,7 +53,7 @@
     <header class="bg-emerald-900 text-white p-4 shadow-lg flex flex-col lg:flex-row items-center justify-between gap-6 z-10">
         <div class="flex items-center gap-3 shrink-0">
             <div class="bg-emerald-700 p-2 rounded-lg">
-                <i data-lucide="footprints" class="w-6 h-6 text-emerald-100"></i>
+                <i data-lucide="trees" class="w-6 h-6 text-emerald-100"></i>
             </div>
             <div>
                 <h1 class="text-lg font-bold leading-tight">LTC/Census Dashboard</h1>
@@ -111,7 +111,7 @@
                 <div class="bg-white p-2.5 rounded border border-slate-100 flex items-center gap-3">
                     <div class="p-2 bg-emerald-50 text-emerald-600 rounded-lg"><i data-lucide="database" class="w-4 h-4"></i></div>
                     <div>
-                        <p class="text-[9px] uppercase font-bold text-slate-400">Unique Trails</p>
+                        <p class="text-[9px] uppercase font-bold text-slate-400">Unique Sites</p>
                         <p id="statCount" class="text-lg font-bold text-slate-700">0</p>
                     </div>
                 </div>
@@ -149,12 +149,12 @@
                 <table class="w-full text-left border-collapse">
                     <thead class="sticky top-0 bg-slate-50 border-b text-slate-500 text-[10px] font-bold z-10">
                         <tr>
-                            <th class="px-4 py-3">TRAIL NAME</th>
+                            <th class="px-4 py-3">PRESERVE NAME</th>
                             <th class="px-4 py-3">COUNTY</th>
                             <th class="px-4 py-3 text-right">POPULATION</th>
                         </tr>
                     </thead>
-                    <tbody id="trailTableBody" class="text-sm divide-y">
+                    <tbody id="preserveTableBody" class="text-sm divide-y">
                         <!-- Rows -->
                     </tbody>
                 </table>
@@ -169,14 +169,14 @@
             <div class="bg-white border-t p-4 grid grid-cols-1 md:grid-cols-4 gap-4 z-10">
                 <div class="flex flex-col gap-1">
                     <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                        <i data-lucide="trending-up" class="w-3 h-3"></i> Max Impact Trail
+                        <i data-lucide="trending-up" class="w-3 h-3"></i> Max Impact Site
                     </span>
                     <p id="maxSite" class="text-xs font-bold text-slate-700 truncate">---</p>
                     <p id="maxPop" class="text-sm font-black text-emerald-600">---</p>
                 </div>
                 <div class="flex flex-col gap-1 border-l border-slate-100 pl-4">
                     <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                        <i data-lucide="trending-down" class="w-3 h-3"></i> Min Impact Trail
+                        <i data-lucide="trending-down" class="w-3 h-3"></i> Min Impact Site
                     </span>
                     <p id="minSite" class="text-xs font-bold text-slate-700 truncate">---</p>
                     <p id="minPop" class="text-sm font-black text-slate-500">---</p>
@@ -202,7 +202,7 @@
             <!-- Loader Overlay -->
             <div id="initialLoader" class="absolute inset-0 bg-white/95 z-[2000] flex flex-col items-center justify-center">
                 <div class="loader ease-linear rounded-full border-4 border-t-4 border-slate-200 h-10 w-10 mb-4"></div>
-                <p id="loaderText" class="text-slate-600 font-semibold">Syncing MI Data...</p>
+                <p id="loaderText" class="text-slate-600 font-semibold">Syncing MI Nature Data...</p>
                 <button id="retryFetch" class="hidden mt-4 bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold text-xs">Retry Connection</button>
             </div>
 
@@ -240,10 +240,10 @@
     <script>
         // Constants
         const CENSUS_URL = "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/Michigan_Census_2020_Redistricting_Blocks/FeatureServer/0";
-        const TRAILS_URL = "https://services.arcgis.com/M0RcaZONLNmkvwdY/arcgis/rest/services/trailssep2015/FeatureServer/0";
+        const PRESERVES_URL = "https://services.arcgis.com/M0RcaZONLNmkvwdY/arcgis/rest/services/Preserves_Mar_2024/FeatureServer/0";
         
-        let trails = [];
-        let filteredTrails = [];
+        let preserves = [];
+        let filteredPreserves = [];
         let selectedName = null;
         let map;
         let featureLayerGroup, bufferLayerGroup;
@@ -277,8 +277,8 @@
             return null;
         }
 
-        function sortTrails() {
-            trails.sort((a, b) => {
+        function sortPreserves() {
+            preserves.sort((a, b) => {
                 if (a.pop !== null && b.pop !== null) return b.pop - a.pop;
                 if (a.pop !== null) return -1;
                 if (b.pop !== null) return 1;
@@ -292,9 +292,8 @@
             const retryBtn = document.getElementById('retryFetch');
             
             try {
-                loaderText.innerText = "Querying Trail Registry...";
-                // Limit to 1000 for performance, can be adjusted
-                const queryUrl = `${TRAILS_URL}/query?where=1%3D1&outFields=*&f=json&returnGeometry=true&outSR=4326&resultRecordCount=1000`;
+                loaderText.innerText = "Querying Nature Preserve Registry...";
+                const queryUrl = `${PRESERVES_URL}/query?where=1%3D1&outFields=*&f=json&returnGeometry=true&outSR=4326&resultRecordCount=1000`;
                 
                 const response = await fetch(queryUrl);
                 if (!response.ok) throw new Error(`Server Error (${response.status})`);
@@ -308,9 +307,8 @@
                     const attr = f.attributes;
                     const keys = Object.keys(attr);
 
-                    // --- ADVANCED NAME DISCOVERY FOR TRAILS ---
                     let name = null;
-                    const nameKeys = ['NAME', 'Trail_Name', 'TrailName', 'Label', 'System', 'UNIT_NAME', 'SITE_NAME'];
+                    const nameKeys = ['NAME', 'Preserve_Name', 'PreserveName', 'Preserve', 'Label', 'OWNER', 'UNIT_NAME', 'SITE_NAME', 'SiteName', 'FacilityName'];
                     
                     for (const key of nameKeys) {
                         if (attr[key] && String(attr[key]).trim().length > 0 && String(attr[key]).trim() !== 'Null') {
@@ -322,15 +320,15 @@
                     if (!name) {
                         const foundKey = keys.find(k => {
                             const lk = k.toLowerCase();
-                            return (lk.includes('name') || lk.includes('label') || lk.includes('trail')) && !lk.includes('county');
+                            return (lk.includes('name') || lk.includes('label') || lk.includes('site')) && !lk.includes('county');
                         });
                         if (foundKey && attr[foundKey]) name = String(attr[foundKey]).trim();
                     }
                     
-                    if (!name || name === 'Null') name = `Trail #${attr.OBJECTID || attr.FID || 'Unknown'}`;
+                    if (!name || name === 'Null') name = `Preserve #${attr.OBJECTID || attr.FID || 'Unknown'}`;
 
                     let county = "Unknown";
-                    const countyKeys = ['COUNTY', 'County', 'CNTY_NAME', 'Location'];
+                    const countyKeys = ['COUNTY', 'County', 'CNTY_NAME', 'CountyName', 'Location'];
                     
                     for (const key of countyKeys) {
                         if (attr[key] && String(attr[key]).trim().length > 0 && String(attr[key]).trim() !== 'Null') {
@@ -361,8 +359,8 @@
                     group.geometries.push({ ...f.geometry, spatialReference: { wkid: 4326 } });
                 });
 
-                trails = Array.from(groups.values());
-                sortTrails(); 
+                preserves = Array.from(groups.values());
+                sortPreserves(); 
                 document.getElementById('initialLoader').classList.add('hidden');
             } catch (err) {
                 console.error("Fetch Error:", err);
@@ -372,9 +370,9 @@
         }
 
         function renderTable() {
-            const tbody = document.getElementById('trailTableBody');
-            tbody.innerHTML = filteredTrails.map(p => `
-                <tr class="hover:bg-emerald-50 cursor-pointer transition-colors ${selectedName === p.name ? 'bg-emerald-100 border-l-4 border-emerald-600' : ''}" onclick="selectTrail('${p.name.replace(/'/g, "\\'")}')">
+            const tbody = document.getElementById('preserveTableBody');
+            tbody.innerHTML = filteredPreserves.map(p => `
+                <tr class="hover:bg-emerald-50 cursor-pointer transition-colors ${selectedName === p.name ? 'bg-emerald-100 border-l-4 border-emerald-600' : ''}" onclick="selectPreserve('${p.name.replace(/'/g, "\\'")}')">
                     <td class="px-4 py-3 font-semibold text-slate-800 leading-tight">${p.name}</td>
                     <td class="px-4 py-3 text-slate-500 text-xs">${p.county}</td>
                     <td class="px-4 py-3 text-right font-mono text-emerald-700 font-bold">
@@ -386,7 +384,7 @@
 
         function renderMapFeatures() {
             featureLayerGroup.clearLayers();
-            filteredTrails.forEach(p => {
+            filteredPreserves.forEach(p => {
                 p.geometries.forEach(geom => {
                     const coords = esriToLeaflet(geom);
                     if (!coords) return;
@@ -400,14 +398,14 @@
                     
                     if (layer) {
                         layer.addTo(featureLayerGroup);
-                        layer.on('click', (e) => { L.DomEvent.stopPropagation(e); selectTrail(p.name); });
+                        layer.on('click', (e) => { L.DomEvent.stopPropagation(e); selectPreserve(p.name); });
                     }
                 });
             });
         }
 
         function getMergedBufferGeoJSON() {
-            const analyzed = trails.filter(p => p.pop !== null && p.pop >= 0);
+            const analyzed = preserves.filter(p => p.pop !== null && p.pop >= 0);
             if (analyzed.length === 0) return null;
 
             let features = [];
@@ -451,10 +449,10 @@
             }
 
             if (selectedName) {
-                const trail = trails.find(p => p.name === selectedName);
-                if (trail) {
+                const preserve = preserves.find(p => p.name === selectedName);
+                if (preserve) {
                     let selectedFeatures = [];
-                    trail.geometries.forEach(geom => {
+                    preserve.geometries.forEach(geom => {
                         let geojsonGeom = null;
                         if (geom.rings) geojsonGeom = { type: "Polygon", coordinates: geom.rings };
                         else if (geom.x !== undefined) geojsonGeom = { type: "Point", coordinates: [geom.x, geom.y] };
@@ -488,18 +486,18 @@
             }
         }
 
-        async function selectTrail(name) {
+        async function selectPreserve(name) {
             selectedName = name;
-            const trail = trails.find(p => p.name === name);
-            if (!trail) return;
+            const preserve = preserves.find(p => p.name === name);
+            if (!preserve) return;
 
             renderTable();
             renderMapFeatures(); 
-            showPanel(trail);
+            showPanel(preserve);
             updateBufferVis();
 
             const bounds = L.latLngBounds();
-            trail.geometries.forEach(geom => {
+            preserve.geometries.forEach(geom => {
                 const coords = esriToLeaflet(geom);
                 if (!coords) return;
                 if (geom.rings) bounds.extend(L.polygon(coords).getBounds());
@@ -508,16 +506,16 @@
             });
 
             if (bounds.isValid()) map.flyToBounds(bounds, { padding: [120, 120], duration: 1 });
-            if (trail.pop === null) calculatePop(trail);
+            if (preserve.pop === null) calculatePop(preserve);
         }
 
-        async function calculatePop(trail) {
-            if (trail.loading || trail.pop !== null) return;
-            trail.loading = true;
+        async function calculatePop(preserve) {
+            if (preserve.loading || preserve.pop !== null) return;
+            preserve.loading = true;
             renderTable();
 
             try {
-                const primaryGeom = trail.geometries[0];
+                const primaryGeom = preserve.geometries[0];
                 const stats = JSON.stringify([{ statisticType: "sum", onStatisticField: "P0010001", outStatisticFieldName: "total_pop" }]);
                 const params = new URLSearchParams();
                 
@@ -534,19 +532,19 @@
                 const response = await fetch(`${CENSUS_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() });
                 const data = await response.json();
                 if (data.error) throw new Error(data.error.message);
-                trail.pop = data.features?.[0]?.attributes?.total_pop || 0;
+                preserve.pop = data.features?.[0]?.attributes?.total_pop || 0;
             } catch (err) {
                 console.error("Census Query Failed:", err);
-                trail.pop = -1;
+                preserve.pop = -1;
             } finally {
-                trail.loading = false;
+                preserve.loading = false;
                 if (!isBatching) {
-                    sortTrails();
+                    sortPreserves();
                     updateStats();
                     updateBufferVis(); 
                     updateTrueAggregate();
                 }
-                if (selectedName === trail.name) showPanel(trail);
+                if (selectedName === preserve.name) showPanel(preserve);
             }
         }
 
@@ -573,14 +571,14 @@
                 await calculatePop(p);
                 
                 if (count % 3 === 0) { 
-                    sortTrails(); 
+                    sortPreserves(); 
                     updateStats(); 
                     updateBufferVis();
                 }
             }
 
             isBatching = false;
-            sortTrails();
+            sortPreserves();
             updateStats();
             updateBufferVis(); 
             updateTrueAggregate();
@@ -595,7 +593,7 @@
 
         function analyzeVisible() {
             const bounds = map.getBounds();
-            const visibleUnanalyzed = trails.filter(p => {
+            const visibleUnanalyzed = preserves.filter(p => {
                 if (p.pop !== null) return false;
                 return p.geometries.some(geom => {
                     const coords = esriToLeaflet(geom);
@@ -667,14 +665,14 @@
         }
 
         function exportCSV() {
-            const analyzed = trails.filter(p => p.pop !== null && p.pop >= 0);
+            const analyzed = preserves.filter(p => p.pop !== null && p.pop >= 0);
             if (analyzed.length === 0) return;
             
             const deduplicatedReachStr = document.getElementById('totalReach').innerText;
             const deduplicatedReach = parseInt(deduplicatedReachStr.replace(/,/g, '')) || 0;
 
             let csv = `"Overall Deduplicated Population Reach",,${deduplicatedReach}\n\n`;
-            csv += `Trail Name,County,Population within ${currentRadius} Miles\n`;
+            csv += `Preserve Name,County,Population within ${currentRadius} Miles\n`;
             
             analyzed.forEach(p => {
                 csv += `"${p.name.replace(/"/g, '""')}","${p.county}",${p.pop}\n`;
@@ -701,11 +699,11 @@
         }
 
         function updateStats() {
-            const analyzed = trails.filter(p => p.pop !== null && p.pop >= 0);
-            document.getElementById('statCount').innerText = trails.length;
+            const analyzed = preserves.filter(p => p.pop !== null && p.pop >= 0);
+            document.getElementById('statCount').innerText = preserves.length;
             document.getElementById('statAnalyzed').innerText = analyzed.length;
             
-            const progressPercent = Math.round((analyzed.length / trails.length) * 100);
+            const progressPercent = Math.round((analyzed.length / preserves.length) * 100);
             document.getElementById('progressFill').style.width = progressPercent + '%';
             document.getElementById('progressText').innerText = progressPercent + '% complete';
 
@@ -726,17 +724,17 @@
 
         function applyFilter() {
             const term = document.getElementById('searchInput').value.toLowerCase();
-            filteredTrails = trails.filter(p => p.name.toLowerCase().includes(term) || p.county.toLowerCase().includes(term));
+            filteredPreserves = preserves.filter(p => p.name.toLowerCase().includes(term) || p.county.toLowerCase().includes(term));
             renderTable();
             renderMapFeatures();
         }
 
         function clearAllData() {
-            trails.forEach(p => p.pop = null);
+            preserves.forEach(p => p.pop = null);
             selectedName = null;
             document.getElementById('infoPanel').classList.add('hidden');
             updateBufferVis();
-            sortTrails();
+            sortPreserves();
             updateStats();
             document.getElementById('totalReach').innerText = "0";
             if (aggregateAborter) aggregateAborter.abort();
@@ -747,7 +745,7 @@
             document.getElementById('viewTable').addEventListener('click', () => { document.getElementById('sidebar').classList.remove('md:w-2/5'); document.getElementById('sidebar').classList.add('w-full'); });
             document.getElementById('viewSplit').addEventListener('click', () => { document.getElementById('sidebar').classList.add('md:w-2/5'); document.getElementById('sidebar').classList.remove('w-full'); });
             
-            document.getElementById('calcAll').addEventListener('click', () => startBatchAnalysis(trails.filter(p => p.pop === null)));
+            document.getElementById('calcAll').addEventListener('click', () => startBatchAnalysis(preserves.filter(p => p.pop === null)));
             document.getElementById('calcWindow').addEventListener('click', analyzeVisible);
             
             document.getElementById('exportCSV').addEventListener('click', exportCSV);
