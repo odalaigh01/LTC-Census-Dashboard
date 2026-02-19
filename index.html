@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LTC/Census Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Turf.js for complex client-side spatial merges -->
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        #map { height: 100%; width: 100%; z-index: 1; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .loader { border-top-color: #059669; animation: spinner 1s linear infinite; }
+        @keyframes spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .analyzing-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .7; }
+        }
+
+        /* Custom Range Slider Styling */
+        input[type=range]::-webkit-slider-runnable-track {
+            background: #065f46;
+            height: 6px;
+            border-radius: 3px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: #10b981;
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body class="bg-slate-100 h-screen flex flex-col overflow-hidden text-slate-900">
+
+    <!-- Header -->
+    <header class="bg-emerald-900 text-white p-4 shadow-lg flex flex-col lg:flex-row items-center justify-between gap-6 z-10">
+        <div class="flex items-center gap-3 shrink-0">
+            <div class="bg-emerald-700 p-2 rounded-lg">
+                <i data-lucide="footprints" class="w-6 h-6 text-emerald-100"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold leading-tight">LTC/Census Dashboard</h1>
+                <p class="text-xs text-emerald-200">Interactive GIS & Population Analysis</p>
+            </div>
+        </div>
+
+        <!-- Buffer Slider -->
+        <div class="flex items-center gap-4 bg-emerald-800/40 p-3 rounded-xl border border-emerald-700/50 flex-1 max-w-md">
+            <div class="flex flex-col flex-1">
+                <div class="flex justify-between text-[10px] uppercase font-bold text-emerald-300 mb-1">
+                    <span>Buffer Radius</span>
+                    <span id="radiusDisplay">5 Miles</span>
+                </div>
+                <input type="range" id="radiusSlider" min="1" max="10" value="5" class="w-full appearance-none bg-transparent cursor-pointer">
+            </div>
+            <button id="clearData" class="p-2 hover:bg-emerald-700 rounded-lg transition-colors text-emerald-300" title="Clear current population data to re-analyze with new radius">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+            </button>
+        </div>
+        
+        <div class="flex items-center gap-4 w-full lg:w-auto">
+            <div class="relative flex-1 lg:flex-none">
+                <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-emerald-300"></i>
+                <input 
+                    type="text" 
+                    id="searchInput"
+                    placeholder="Search registry..." 
+                    class="bg-emerald-800/50 border border-emerald-700 rounded-lg py-2 pl-9 pr-4 text-sm w-full lg:w-64 focus:ring-2 focus:ring-emerald-400 outline-none placeholder:text-emerald-400"
+                />
+            </div>
+            <div class="flex bg-emerald-800 rounded-lg p-1">
+                <button id="viewSplit" class="p-1.5 rounded bg-emerald-600 shadow-sm"><i data-lucide="layout" class="w-4 h-4"></i></button>
+                <button id="viewTable" class="p-1.5 rounded hover:bg-emerald-700 ml-1"><i data-lucide="table" class="w-4 h-4"></i></button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex overflow-hidden">
+        
+        <!-- Sidebar -->
+        <div id="sidebar" class="flex flex-col border-r bg-white shadow-xl transition-all duration-300 w-full md:w-2/5 overflow-hidden">
+            
+            <div class="p-4 bg-emerald-50/50 border-b border-slate-200">
+                <h3 class="text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <i data-lucide="info" class="w-4 h-4 text-emerald-600"></i> About this Dashboard
+                </h3>
+                <p class="text-[11px] text-slate-600 leading-relaxed">
+                    This tool cross-references Little Traverse Conservancy spatial data with 2020 US Census Redistricting blocks. Adjust the buffer radius above and select a feature to calculate the total population living within its impact zone. The dashboard automatically mathematically merges overlapping buffers to calculate a true, deduplicated aggregate population reach.
+                </p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 p-3 bg-slate-50 border-b border-slate-100">
+                <div class="bg-white p-2.5 rounded border border-slate-100 flex items-center gap-3">
+                    <div class="p-2 bg-emerald-50 text-emerald-600 rounded-lg"><i data-lucide="database" class="w-4 h-4"></i></div>
+                    <div>
+                        <p class="text-[9px] uppercase font-bold text-slate-400">Unique Trails</p>
+                        <p id="statCount" class="text-lg font-bold text-slate-700">0</p>
+                    </div>
+                </div>
+                <div class="bg-white p-2.5 rounded border border-slate-100 flex items-center gap-3">
+                    <div class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i data-lucide="check-circle" class="w-4 h-4"></i></div>
+                    <div>
+                        <p class="text-[9px] uppercase font-bold text-slate-400">Analyzed</p>
+                        <p id="statAnalyzed" class="text-lg font-bold text-slate-700">0</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-3 flex justify-between items-center bg-white border-b">
+                <h2 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Registry</h2>
+                <div class="flex flex-wrap gap-2">
+                    <button id="exportCSV" class="text-[10px] border border-slate-200 hover:bg-slate-50 text-slate-600 px-3 py-1.5 rounded font-bold transition-all flex items-center gap-2">
+                        <i data-lucide="download" class="w-3 h-3"></i> CSV
+                    </button>
+                    <button id="calcWindow" class="text-[10px] bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded font-bold transition-all shadow-sm flex items-center gap-2">
+                        <i data-lucide="scan" class="w-3 h-3"></i> ANALYZE WINDOW
+                    </button>
+                    <button id="calcAll" class="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded font-bold transition-all shadow-sm flex items-center gap-2">
+                        <i data-lucide="play" class="w-3 h-3"></i> ANALYZE ALL
+                    </button>
+                    <button id="stopBatch" class="hidden text-[10px] bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded font-bold transition-all">
+                        STOP
+                    </button>
+                    <button id="clearAllBtn" class="text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1.5 rounded font-bold transition-all shadow-sm flex items-center gap-2">
+                        <i data-lucide="rotate-ccw" class="w-3 h-3"></i> RESET
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-auto custom-scrollbar">
+                <table class="w-full text-left border-collapse">
+                    <thead class="sticky top-0 bg-slate-50 border-b text-slate-500 text-[10px] font-bold z-10">
+                        <tr>
+                            <th class="px-4 py-3">TRAIL NAME</th>
+                            <th class="px-4 py-3">COUNTY</th>
+                            <th class="px-4 py-3 text-right">POPULATION</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trailTableBody" class="text-sm divide-y">
+                        <!-- Rows -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Map -->
+        <div id="mapContainer" class="flex-1 relative flex flex-col">
+            <div id="map" class="flex-1 bg-slate-200"></div>
+
+            <!-- Enhanced Statistical Insights -->
+            <div class="bg-white border-t p-4 grid grid-cols-1 md:grid-cols-4 gap-4 z-10">
+                <div class="flex flex-col gap-1">
+                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <i data-lucide="trending-up" class="w-3 h-3"></i> Max Impact Trail
+                    </span>
+                    <p id="maxSite" class="text-xs font-bold text-slate-700 truncate">---</p>
+                    <p id="maxPop" class="text-sm font-black text-emerald-600">---</p>
+                </div>
+                <div class="flex flex-col gap-1 border-l border-slate-100 pl-4">
+                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <i data-lucide="trending-down" class="w-3 h-3"></i> Min Impact Trail
+                    </span>
+                    <p id="minSite" class="text-xs font-bold text-slate-700 truncate">---</p>
+                    <p id="minPop" class="text-sm font-black text-slate-500">---</p>
+                </div>
+                <div class="flex flex-col gap-1 border-l border-slate-100 pl-4">
+                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <i data-lucide="users" class="w-3 h-3"></i> Deduplicated Reach
+                    </span>
+                    <p id="totalReach" class="text-sm font-black text-blue-600">0</p>
+                    <p class="text-[9px] text-slate-400 leading-tight">Merged overlap (Gross sum: <span id="grossReach">0</span>)</p>
+                </div>
+                <div class="flex flex-col gap-1 border-l border-slate-100 pl-4">
+                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <i data-lucide="activity" class="w-3 h-3"></i> Analysis Progress
+                    </span>
+                    <div class="w-full bg-slate-100 h-2 rounded-full mt-1">
+                        <div id="progressFill" class="bg-emerald-500 h-2 rounded-full transition-all duration-500" style="width: 0%"></div>
+                    </div>
+                    <p id="progressText" class="text-[10px] font-bold text-slate-500">0% complete</p>
+                </div>
+            </div>
+
+            <!-- Loader Overlay -->
+            <div id="initialLoader" class="absolute inset-0 bg-white/95 z-[2000] flex flex-col items-center justify-center">
+                <div class="loader ease-linear rounded-full border-4 border-t-4 border-slate-200 h-10 w-10 mb-4"></div>
+                <p id="loaderText" class="text-slate-600 font-semibold">Syncing MI Data...</p>
+                <button id="retryFetch" class="hidden mt-4 bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold text-xs">Retry Connection</button>
+            </div>
+
+            <!-- Info Panel -->
+            <div id="infoPanel" class="hidden absolute top-4 right-4 w-72 bg-white rounded-xl shadow-2xl border border-emerald-100 p-4 z-[1000] animate-in fade-in slide-in-from-right-2 duration-200">
+                <div class="flex justify-between items-start mb-3">
+                    <h4 id="panelName" class="font-bold text-slate-800 leading-tight pr-4">---</h4>
+                    <button id="closePanel" class="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
+                </div>
+                <div class="space-y-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
+                            <i data-lucide="users" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <p id="panelPopLabel" class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Buffer Pop</p>
+                            <p id="panelPop" class="font-bold text-slate-800 font-mono text-lg leading-none">---</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
+                            <i data-lucide="map-pin" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">County</p>
+                            <p id="panelCounty" class="font-bold text-slate-800 leading-none">---</p>
+                        </div>
+                    </div>
+                    <div id="panelAction" class="pt-2 border-t mt-2"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Constants
+        const CENSUS_URL = "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/Michigan_Census_2020_Redistricting_Blocks/FeatureServer/0";
+        const TRAILS_URL = "https://services.arcgis.com/M0RcaZONLNmkvwdY/arcgis/rest/services/trailssep2015/FeatureServer/0";
+        
+        let trails = [];
+        let filteredTrails = [];
+        let selectedName = null;
+        let map;
+        let featureLayerGroup, bufferLayerGroup;
+        let isBatching = false;
+        let currentRadius = 5;
+        let aggregateAborter = null;
+
+        window.onload = async () => {
+            lucide.createIcons();
+            initMap();
+            await fetchData();
+            setupEventListeners();
+        };
+
+        function initMap() {
+            map = L.map('map', { zoomControl: false }).setView([44.3148, -84.6024], 7);
+            L.control.zoom({ position: 'bottomright' }).addTo(map);
+            L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+
+            bufferLayerGroup = L.layerGroup().addTo(map);
+            featureLayerGroup = L.layerGroup().addTo(map);
+        }
+
+        function esriToLeaflet(geometry) {
+            if (!geometry) return null;
+            if (geometry.rings) return geometry.rings.map(ring => ring.map(coord => [coord[1], coord[0]]));
+            if (geometry.x !== undefined && geometry.y !== undefined) return [geometry.y, geometry.x];
+            if (geometry.paths) return geometry.paths.map(path => path.map(coord => [coord[1], coord[0]]));
+            return null;
+        }
+
+        function sortTrails() {
+            trails.sort((a, b) => {
+                if (a.pop !== null && b.pop !== null) return b.pop - a.pop;
+                if (a.pop !== null) return -1;
+                if (b.pop !== null) return 1;
+                return a.name.localeCompare(b.name);
+            });
+            applyFilter();
+        }
+
+        async function fetchData() {
+            const loaderText = document.getElementById('loaderText');
+            const retryBtn = document.getElementById('retryFetch');
+            
+            try {
+                loaderText.innerText = "Querying Trail Registry...";
+                // Limit to 1000 for performance, can be adjusted
+                const queryUrl = `${TRAILS_URL}/query?where=1%3D1&outFields=*&f=json&returnGeometry=true&outSR=4326&resultRecordCount=1000`;
+                
+                const response = await fetch(queryUrl);
+                if (!response.ok) throw new Error(`Server Error (${response.status})`);
+                const data = await response.json();
+                
+                if (data.error) throw new Error(data.error.message || "GIS Error");
+                
+                const groups = new Map();
+
+                data.features.forEach(f => {
+                    const attr = f.attributes;
+                    const keys = Object.keys(attr);
+
+                    // --- ADVANCED NAME DISCOVERY FOR TRAILS ---
+                    let name = null;
+                    const nameKeys = ['NAME', 'Trail_Name', 'TrailName', 'Label', 'System', 'UNIT_NAME', 'SITE_NAME'];
+                    
+                    for (const key of nameKeys) {
+                        if (attr[key] && String(attr[key]).trim().length > 0 && String(attr[key]).trim() !== 'Null') {
+                            name = String(attr[key]).trim();
+                            break;
+                        }
+                    }
+                    
+                    if (!name) {
+                        const foundKey = keys.find(k => {
+                            const lk = k.toLowerCase();
+                            return (lk.includes('name') || lk.includes('label') || lk.includes('trail')) && !lk.includes('county');
+                        });
+                        if (foundKey && attr[foundKey]) name = String(attr[foundKey]).trim();
+                    }
+                    
+                    if (!name || name === 'Null') name = `Trail #${attr.OBJECTID || attr.FID || 'Unknown'}`;
+
+                    let county = "Unknown";
+                    const countyKeys = ['COUNTY', 'County', 'CNTY_NAME', 'Location'];
+                    
+                    for (const key of countyKeys) {
+                        if (attr[key] && String(attr[key]).trim().length > 0 && String(attr[key]).trim() !== 'Null') {
+                            county = String(attr[key]).trim();
+                            break;
+                        }
+                    }
+
+                    if (county === "Unknown") {
+                        const foundKey = keys.find(k => {
+                            const lk = k.toLowerCase();
+                            return lk.includes('county') || lk.includes('cnty');
+                        });
+                        if (foundKey && attr[foundKey]) county = String(attr[foundKey]).trim();
+                    }
+                    
+                    if (!groups.has(name)) {
+                        groups.set(name, {
+                            name: name,
+                            county: county,
+                            geometries: [],
+                            pop: null,
+                            loading: false
+                        });
+                    }
+                    
+                    const group = groups.get(name);
+                    group.geometries.push({ ...f.geometry, spatialReference: { wkid: 4326 } });
+                });
+
+                trails = Array.from(groups.values());
+                sortTrails(); 
+                document.getElementById('initialLoader').classList.add('hidden');
+            } catch (err) {
+                console.error("Fetch Error:", err);
+                loaderText.innerHTML = `<span class="text-red-600">Connection Failed: ${err.message}</span>`;
+                retryBtn.classList.remove('hidden');
+            }
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('trailTableBody');
+            tbody.innerHTML = filteredTrails.map(p => `
+                <tr class="hover:bg-emerald-50 cursor-pointer transition-colors ${selectedName === p.name ? 'bg-emerald-100 border-l-4 border-emerald-600' : ''}" onclick="selectTrail('${p.name.replace(/'/g, "\\'")}')">
+                    <td class="px-4 py-3 font-semibold text-slate-800 leading-tight">${p.name}</td>
+                    <td class="px-4 py-3 text-slate-500 text-xs">${p.county}</td>
+                    <td class="px-4 py-3 text-right font-mono text-emerald-700 font-bold">
+                        ${p.loading ? '<div class="inline-block w-3 h-3 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>' : (p.pop === null ? '<span class="text-[10px] text-slate-300">--</span>' : (p.pop === -1 ? 'Err' : p.pop.toLocaleString()))}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function renderMapFeatures() {
+            featureLayerGroup.clearLayers();
+            filteredTrails.forEach(p => {
+                p.geometries.forEach(geom => {
+                    const coords = esriToLeaflet(geom);
+                    if (!coords) return;
+                    let layer;
+                    const isSelected = p.name === selectedName;
+                    const style = { color: isSelected ? '#059669' : '#10b981', weight: isSelected ? 4 : 2, fillOpacity: isSelected ? 0.6 : 0.3 };
+                    
+                    if (geom.rings) layer = L.polygon(coords, style);
+                    else if (geom.x !== undefined) layer = L.circleMarker(coords, { radius: 6, ...style });
+                    else layer = L.polyline(coords, { ...style, weight: isSelected ? 6 : 3 });
+                    
+                    if (layer) {
+                        layer.addTo(featureLayerGroup);
+                        layer.on('click', (e) => { L.DomEvent.stopPropagation(e); selectTrail(p.name); });
+                    }
+                });
+            });
+        }
+
+        function getMergedBufferGeoJSON() {
+            const analyzed = trails.filter(p => p.pop !== null && p.pop >= 0);
+            if (analyzed.length === 0) return null;
+
+            let features = [];
+            analyzed.forEach(p => {
+                p.geometries.forEach(geom => {
+                    let geojsonGeom = null;
+                    if (geom.rings) geojsonGeom = { type: "Polygon", coordinates: geom.rings };
+                    else if (geom.x !== undefined) geojsonGeom = { type: "Point", coordinates: [geom.x, geom.y] };
+                    else if (geom.paths) geojsonGeom = { type: "MultiLineString", coordinates: geom.paths };
+
+                    if (geojsonGeom) {
+                        try {
+                            let feature = turf.feature(geojsonGeom);
+                            let buffered = turf.buffer(feature, currentRadius, { units: 'miles' });
+                            if (buffered) features.push(buffered);
+                        } catch (e) { console.warn("Turf Buffer Skipped:", e); }
+                    }
+                });
+            });
+
+            if (features.length === 0) return null;
+            let fc = turf.featureCollection(features);
+            return turf.dissolve(fc);
+        }
+
+        function updateBufferVis() {
+            bufferLayerGroup.clearLayers();
+            
+            const unioned = getMergedBufferGeoJSON();
+            if (unioned) {
+                L.geoJSON(unioned, {
+                    style: {
+                        color: '#10b981',
+                        weight: 1,
+                        dashArray: '4, 4',
+                        fillColor: '#10b981',
+                        fillOpacity: 0.1,
+                        interactive: false
+                    }
+                }).addTo(bufferLayerGroup);
+            }
+
+            if (selectedName) {
+                const trail = trails.find(p => p.name === selectedName);
+                if (trail) {
+                    let selectedFeatures = [];
+                    trail.geometries.forEach(geom => {
+                        let geojsonGeom = null;
+                        if (geom.rings) geojsonGeom = { type: "Polygon", coordinates: geom.rings };
+                        else if (geom.x !== undefined) geojsonGeom = { type: "Point", coordinates: [geom.x, geom.y] };
+                        else if (geom.paths) geojsonGeom = { type: "MultiLineString", coordinates: geom.paths };
+
+                        if (geojsonGeom) {
+                            try {
+                                let feature = turf.feature(geojsonGeom);
+                                let buffered = turf.buffer(feature, currentRadius, { units: 'miles' });
+                                if (buffered) selectedFeatures.push(buffered);
+                            } catch (e) {}
+                        }
+                    });
+
+                    if (selectedFeatures.length > 0) {
+                        let fc = turf.featureCollection(selectedFeatures);
+                        let selectedUnioned = turf.dissolve(fc);
+                        
+                        L.geoJSON(selectedUnioned, {
+                            style: {
+                                color: '#059669',
+                                weight: 2,
+                                dashArray: '8, 8',
+                                fillColor: '#059669',
+                                fillOpacity: 0.2, 
+                                interactive: false
+                            }
+                        }).addTo(bufferLayerGroup);
+                    }
+                }
+            }
+        }
+
+        async function selectTrail(name) {
+            selectedName = name;
+            const trail = trails.find(p => p.name === name);
+            if (!trail) return;
+
+            renderTable();
+            renderMapFeatures(); 
+            showPanel(trail);
+            updateBufferVis();
+
+            const bounds = L.latLngBounds();
+            trail.geometries.forEach(geom => {
+                const coords = esriToLeaflet(geom);
+                if (!coords) return;
+                if (geom.rings) bounds.extend(L.polygon(coords).getBounds());
+                else if (geom.paths) bounds.extend(L.polyline(coords).getBounds());
+                else if (geom.x !== undefined) bounds.extend(coords);
+            });
+
+            if (bounds.isValid()) map.flyToBounds(bounds, { padding: [120, 120], duration: 1 });
+            if (trail.pop === null) calculatePop(trail);
+        }
+
+        async function calculatePop(trail) {
+            if (trail.loading || trail.pop !== null) return;
+            trail.loading = true;
+            renderTable();
+
+            try {
+                const primaryGeom = trail.geometries[0];
+                const stats = JSON.stringify([{ statisticType: "sum", onStatisticField: "P0010001", outStatisticFieldName: "total_pop" }]);
+                const params = new URLSearchParams();
+                
+                params.append('geometry', JSON.stringify(primaryGeom));
+                // Automatically handle Polyline type for paths
+                params.append('geometryType', primaryGeom.rings ? 'esriGeometryPolygon' : (primaryGeom.paths ? 'esriGeometryPolyline' : 'esriGeometryPoint'));
+                params.append('spatialRel', 'esriSpatialRelIntersects');
+                params.append('distance', currentRadius.toString());
+                params.append('units', 'esriSRUnit_StatuteMile');
+                params.append('outStatistics', stats);
+                params.append('f', 'json');
+                params.append('inSR', '4326');
+
+                const response = await fetch(`${CENSUS_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() });
+                const data = await response.json();
+                if (data.error) throw new Error(data.error.message);
+                trail.pop = data.features?.[0]?.attributes?.total_pop || 0;
+            } catch (err) {
+                console.error("Census Query Failed:", err);
+                trail.pop = -1;
+            } finally {
+                trail.loading = false;
+                if (!isBatching) {
+                    sortTrails();
+                    updateStats();
+                    updateBufferVis(); 
+                    updateTrueAggregate();
+                }
+                if (selectedName === trail.name) showPanel(trail);
+            }
+        }
+
+        async function startBatchAnalysis(targetList) {
+            if (isBatching || targetList.length === 0) return;
+
+            isBatching = true;
+            const btnAll = document.getElementById('calcAll');
+            const btnWindow = document.getElementById('calcWindow');
+            const stopBtn = document.getElementById('stopBatch');
+            
+            stopBtn.classList.remove('hidden');
+            btnAll.disabled = true;
+            btnWindow.disabled = true;
+
+            let count = 0;
+            const total = targetList.length;
+
+            for (const p of targetList) {
+                if (!isBatching) break;
+                count++;
+                btnAll.innerHTML = `<i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> ${count}/${total}`;
+                lucide.createIcons();
+                await calculatePop(p);
+                
+                if (count % 3 === 0) { 
+                    sortTrails(); 
+                    updateStats(); 
+                    updateBufferVis();
+                }
+            }
+
+            isBatching = false;
+            sortTrails();
+            updateStats();
+            updateBufferVis(); 
+            updateTrueAggregate();
+            
+            btnAll.innerHTML = `<i data-lucide="play" class="w-3 h-3"></i> ANALYZE ALL`;
+            btnWindow.innerHTML = `<i data-lucide="scan" class="w-3 h-3"></i> ANALYZE WINDOW`;
+            btnAll.disabled = false;
+            btnWindow.disabled = false;
+            stopBtn.classList.add('hidden');
+            lucide.createIcons();
+        }
+
+        function analyzeVisible() {
+            const bounds = map.getBounds();
+            const visibleUnanalyzed = trails.filter(p => {
+                if (p.pop !== null) return false;
+                return p.geometries.some(geom => {
+                    const coords = esriToLeaflet(geom);
+                    if (!coords) return false;
+                    if (geom.rings) return bounds.intersects(L.polygon(coords).getBounds());
+                    if (geom.paths) return bounds.intersects(L.polyline(coords).getBounds());
+                    return bounds.contains(L.latLng(coords));
+                });
+            });
+            startBatchAnalysis(visibleUnanalyzed);
+        }
+
+        async function updateTrueAggregate() {
+            const unioned = getMergedBufferGeoJSON();
+            if (!unioned) {
+                document.getElementById('totalReach').innerText = "0";
+                return;
+            }
+
+            document.getElementById('totalReach').innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin inline"></i>';
+            lucide.createIcons();
+
+            try {
+                if (aggregateAborter) aggregateAborter.abort();
+                aggregateAborter = new AbortController();
+
+                let allRings = [];
+                turf.geomEach(unioned, function (currentGeometry) {
+                    if (currentGeometry.type === 'Polygon') {
+                        allRings.push(...currentGeometry.coordinates);
+                    } else if (currentGeometry.type === 'MultiPolygon') {
+                        currentGeometry.coordinates.forEach(poly => {
+                            allRings.push(...poly);
+                        });
+                    }
+                });
+
+                const unionedEsri = { rings: allRings, spatialReference: { wkid: 4326 } };
+
+                const stats = JSON.stringify([{ statisticType: "sum", onStatisticField: "P0010001", outStatisticFieldName: "total_pop" }]);
+                const params = new URLSearchParams();
+                params.append('geometry', JSON.stringify(unionedEsri));
+                params.append('geometryType', 'esriGeometryPolygon');
+                params.append('spatialRel', 'esriSpatialRelIntersects');
+                params.append('distance', '0'); 
+                params.append('units', 'esriSRUnit_StatuteMile');
+                params.append('outStatistics', stats);
+                params.append('f', 'json');
+                params.append('inSR', '4326');
+
+                const response = await fetch(`${CENSUS_URL}/query`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, 
+                    body: params.toString(),
+                    signal: aggregateAborter.signal
+                });
+                
+                const data = await response.json();
+                if (data.error) throw new Error(data.error.message);
+                
+                const truePop = data.features?.[0]?.attributes?.total_pop || 0;
+                document.getElementById('totalReach').innerText = truePop.toLocaleString();
+            } catch(err) {
+                if (err.name !== 'AbortError') {
+                    console.error("True Aggregate Error:", err);
+                    document.getElementById('totalReach').innerText = "Error";
+                }
+            }
+        }
+
+        function exportCSV() {
+            const analyzed = trails.filter(p => p.pop !== null && p.pop >= 0);
+            if (analyzed.length === 0) return;
+            
+            const deduplicatedReachStr = document.getElementById('totalReach').innerText;
+            const deduplicatedReach = parseInt(deduplicatedReachStr.replace(/,/g, '')) || 0;
+
+            let csv = `"Overall Deduplicated Population Reach",,${deduplicatedReach}\n\n`;
+            csv += `Trail Name,County,Population within ${currentRadius} Miles\n`;
+            
+            analyzed.forEach(p => {
+                csv += `"${p.name.replace(/"/g, '""')}","${p.county}",${p.pop}\n`;
+            });
+            
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `ltc_census_impact_${currentRadius}mi.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function showPanel(p) {
+            const panel = document.getElementById('infoPanel');
+            document.getElementById('panelName').innerText = p.name;
+            document.getElementById('panelCounty').innerText = p.county;
+            document.getElementById('panelPopLabel').innerText = `${currentRadius}-Mile Population`;
+            document.getElementById('panelPop').innerText = p.loading ? "Analyzing..." : (p.pop === -1 ? "Error" : (p.pop === null ? "..." : p.pop.toLocaleString()));
+            panel.classList.remove('hidden');
+        }
+
+        function updateStats() {
+            const analyzed = trails.filter(p => p.pop !== null && p.pop >= 0);
+            document.getElementById('statCount').innerText = trails.length;
+            document.getElementById('statAnalyzed').innerText = analyzed.length;
+            
+            const progressPercent = Math.round((analyzed.length / trails.length) * 100);
+            document.getElementById('progressFill').style.width = progressPercent + '%';
+            document.getElementById('progressText').innerText = progressPercent + '% complete';
+
+            if (analyzed.length > 0) {
+                const sorted = [...analyzed].sort((a,b) => b.pop - a.pop);
+                document.getElementById('maxSite').innerText = sorted[0].name;
+                document.getElementById('maxPop').innerText = sorted[0].pop.toLocaleString();
+                
+                document.getElementById('minSite').innerText = sorted[sorted.length - 1].name;
+                document.getElementById('minPop').innerText = sorted[sorted.length - 1].pop.toLocaleString();
+                
+                const grossTotal = analyzed.reduce((sum, p) => sum + p.pop, 0);
+                document.getElementById('grossReach').innerText = grossTotal.toLocaleString();
+            } else {
+                document.getElementById('grossReach').innerText = "0";
+            }
+        }
+
+        function applyFilter() {
+            const term = document.getElementById('searchInput').value.toLowerCase();
+            filteredTrails = trails.filter(p => p.name.toLowerCase().includes(term) || p.county.toLowerCase().includes(term));
+            renderTable();
+            renderMapFeatures();
+        }
+
+        function clearAllData() {
+            trails.forEach(p => p.pop = null);
+            selectedName = null;
+            document.getElementById('infoPanel').classList.add('hidden');
+            updateBufferVis();
+            sortTrails();
+            updateStats();
+            document.getElementById('totalReach').innerText = "0";
+            if (aggregateAborter) aggregateAborter.abort();
+        }
+
+        function setupEventListeners() {
+            document.getElementById('searchInput').addEventListener('input', applyFilter);
+            document.getElementById('viewTable').addEventListener('click', () => { document.getElementById('sidebar').classList.remove('md:w-2/5'); document.getElementById('sidebar').classList.add('w-full'); });
+            document.getElementById('viewSplit').addEventListener('click', () => { document.getElementById('sidebar').classList.add('md:w-2/5'); document.getElementById('sidebar').classList.remove('w-full'); });
+            
+            document.getElementById('calcAll').addEventListener('click', () => startBatchAnalysis(trails.filter(p => p.pop === null)));
+            document.getElementById('calcWindow').addEventListener('click', analyzeVisible);
+            
+            document.getElementById('exportCSV').addEventListener('click', exportCSV);
+            document.getElementById('stopBatch').addEventListener('click', () => isBatching = false);
+            document.getElementById('clearAllBtn').addEventListener('click', clearAllData);
+            document.getElementById('closePanel').addEventListener('click', () => { document.getElementById('infoPanel').classList.add('hidden'); selectedName = null; updateBufferVis(); renderTable(); renderMapFeatures(); });
+            
+            document.getElementById('radiusSlider').addEventListener('input', (e) => {
+                currentRadius = parseInt(e.target.value);
+                document.getElementById('radiusDisplay').innerText = `${currentRadius} Miles`;
+                updateBufferVis();
+            });
+
+            document.getElementById('radiusSlider').addEventListener('change', (e) => {
+                clearAllData();
+            });
+
+            document.getElementById('clearData').addEventListener('click', clearAllData);
+        }
+    </script>
+</body>
+</html>
