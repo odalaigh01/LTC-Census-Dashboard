@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LTC/Census Dashboard</title>
+    <title>Road Network Drive-Time Analysis</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -45,6 +45,8 @@
             margin-top: -6px;
             box-shadow: 0 0 10px rgba(0,0,0,0.2);
         }
+
+        .cursor-crosshair-map { cursor: crosshair !important; }
     </style>
 </head>
 <body class="bg-slate-100 h-screen flex flex-col overflow-hidden text-slate-900">
@@ -56,21 +58,21 @@
                 <i data-lucide="trees" class="w-6 h-6 text-emerald-100"></i>
             </div>
             <div>
-                <h1 class="text-lg font-bold leading-tight">LTC/Census Dashboard</h1>
+                <h1 class="text-lg font-bold leading-tight">Road Network Drive-Time Analysis</h1>
                 <p class="text-xs text-emerald-200">Interactive GIS & Population Analysis</p>
             </div>
         </div>
 
-        <!-- Buffer Slider -->
+        <!-- Drive Time Slider -->
         <div class="flex items-center gap-4 bg-emerald-800/40 p-3 rounded-xl border border-emerald-700/50 flex-1 max-w-md">
             <div class="flex flex-col flex-1">
                 <div class="flex justify-between text-[10px] uppercase font-bold text-emerald-300 mb-1">
-                    <span>Buffer Radius</span>
-                    <span id="radiusDisplay">5 Miles</span>
+                    <span>Drive Time Area</span>
+                    <span id="driveTimeDisplay">10 Minutes</span>
                 </div>
-                <input type="range" id="radiusSlider" min="1" max="10" value="5" class="w-full appearance-none bg-transparent cursor-pointer">
+                <input type="range" id="driveTimeSlider" min="5" max="30" step="5" value="10" class="w-full appearance-none bg-transparent cursor-pointer">
             </div>
-            <button id="clearData" class="p-2 hover:bg-emerald-700 rounded-lg transition-colors text-emerald-300" title="Clear current population data to re-analyze with new radius">
+            <button id="clearData" class="p-2 hover:bg-emerald-700 rounded-lg transition-colors text-emerald-300" title="Clear current population data to re-analyze with new drive time">
                 <i data-lucide="refresh-cw" class="w-4 h-4"></i>
             </button>
         </div>
@@ -103,7 +105,7 @@
                     <i data-lucide="info" class="w-4 h-4 text-emerald-600"></i> About this Dashboard
                 </h3>
                 <p class="text-[11px] text-slate-600 leading-relaxed">
-                    This tool cross-references Little Traverse Conservancy spatial data with 2020 US Census Redistricting blocks. Adjust the buffer radius above and select a feature to calculate the total population living within its impact zone. The dashboard automatically mathematically merges overlapping buffers to calculate a true, deduplicated aggregate population reach.
+                    This Road Network Drive-Time Analysis tool cross-references Little Traverse Conservancy spatial data with 2020 US Census Redistricting blocks. Adjust the drive time above, select a preserve, and <strong>click the map to set an exact starting point</strong> (like a parking lot). The tool calculates the road network isochrone, applies a 500-foot buffer to capture adjacent residential parcels, and queries the Census for the impacted population. Overlapping drive-times are mathematically merged to calculate a true, deduplicated aggregate reach.
                 </p>
             </div>
 
@@ -162,7 +164,18 @@
         </div>
 
         <!-- Map -->
-        <div id="mapContainer" class="flex-1 relative flex flex-col">
+        <div id="mapContainer" class="flex-1 relative flex flex-col overflow-hidden">
+            
+            <!-- Interactive Routing Prompt Banner -->
+            <div id="routingPrompt" class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-4 py-3 rounded-xl shadow-2xl z-[2000] flex items-center gap-3 animate-in fade-in slide-in-from-top-4 border border-blue-400">
+                <i data-lucide="target" class="w-6 h-6 animate-pulse text-blue-200"></i>
+                <div class="flex-1 pr-4">
+                    <p class="text-sm font-bold leading-tight">Set Starting Point</p>
+                    <p class="text-[11px] text-blue-100 mt-0.5">Click the map to set the parking/access point for <span id="promptPreserveName" class="font-bold text-white underline"></span></p>
+                </div>
+                <button id="cancelRouting" class="bg-blue-700 hover:bg-blue-800 p-1.5 rounded-lg transition-colors border border-blue-500 shadow-sm"><i data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+
             <div id="map" class="flex-1 bg-slate-200"></div>
 
             <!-- Enhanced Statistical Insights -->
@@ -218,7 +231,7 @@
                             <i data-lucide="users" class="w-5 h-5"></i>
                         </div>
                         <div>
-                            <p id="panelPopLabel" class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Buffer Pop</p>
+                            <p id="panelPopLabel" class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Drive Time Pop</p>
                             <p id="panelPop" class="font-bold text-slate-800 font-mono text-lg leading-none">---</p>
                         </div>
                     </div>
@@ -241,6 +254,7 @@
         // Constants
         const CENSUS_URL = "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/Michigan_Census_2020_Redistricting_Blocks/FeatureServer/0";
         const PRESERVES_URL = "https://services.arcgis.com/M0RcaZONLNmkvwdY/arcgis/rest/services/Preserves_Mar_2024/FeatureServer/0";
+        const ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjEyMzg0NzI3ZTVjYzQ2YWE4ZGQ3YTI1MDg0ZWIxNDg3IiwiaCI6Im11cm11cjY0In0=";
         
         let preserves = [];
         let filteredPreserves = [];
@@ -248,8 +262,31 @@
         let map;
         let featureLayerGroup, bufferLayerGroup;
         let isBatching = false;
-        let currentRadius = 5;
+        let currentDriveTime = 10; // Minutes
         let aggregateAborter = null;
+        
+        // Interactive Routing State
+        let isWaitingForStartClick = false;
+        let pendingPreserveForRouting = null;
+        let interactiveStartMarker = null;
+
+        async function handleInteractiveClick(latlng) {
+            if (isWaitingForStartClick && pendingPreserveForRouting) {
+                // Exit waiting state immediately
+                isWaitingForStartClick = false;
+                document.getElementById('map').classList.remove('cursor-crosshair-map');
+                document.getElementById('routingPrompt').classList.add('hidden');
+
+                // Drop a visual marker where they clicked
+                if (interactiveStartMarker) map.removeLayer(interactiveStartMarker);
+                interactiveStartMarker = L.marker(latlng).addTo(bufferLayerGroup);
+
+                // Execute population calc with this specific origin
+                const p = pendingPreserveForRouting;
+                pendingPreserveForRouting = null;
+                await calculatePop(p, latlng);
+            }
+        }
 
         window.onload = async () => {
             lucide.createIcons();
@@ -267,6 +304,11 @@
 
             bufferLayerGroup = L.layerGroup().addTo(map);
             featureLayerGroup = L.layerGroup().addTo(map);
+
+            // Handle the interactive map click for custom starting points
+            map.on('click', async (e) => {
+                await handleInteractiveClick(e.latlng);
+            });
         }
 
         function esriToLeaflet(geometry) {
@@ -350,6 +392,7 @@
                             name: name,
                             county: county,
                             geometries: [],
+                            isochrone: null,
                             pop: null,
                             loading: false
                         });
@@ -390,43 +433,34 @@
                     if (!coords) return;
                     let layer;
                     const isSelected = p.name === selectedName;
-                    const style = { color: isSelected ? '#059669' : '#10b981', weight: isSelected ? 4 : 2, fillOpacity: isSelected ? 0.6 : 0.3 };
-                    
+                    const style = { color: isSelected ? '#059669' : '#10b981', weight: isSelected ? 3 : 2, fillOpacity: isSelected ? 0.6 : 0.3 };
                     if (geom.rings) layer = L.polygon(coords, style);
                     else if (geom.x !== undefined) layer = L.circleMarker(coords, { radius: 6, ...style });
-                    else layer = L.polyline(coords, { ...style, weight: isSelected ? 6 : 3 });
+                    else layer = L.polyline(coords, { ...style, weight: isSelected ? 5 : 3 });
                     
                     if (layer) {
                         layer.addTo(featureLayerGroup);
-                        layer.on('click', (e) => { L.DomEvent.stopPropagation(e); selectPreserve(p.name); });
+                        // Prevent the polygon click from bleeding down to the map click
+                        layer.on('click', async (e) => { 
+                            L.DomEvent.stopPropagation(e); 
+                            if (isWaitingForStartClick) {
+                                // If routing, treat the polygon click as the starting point placement
+                                await handleInteractiveClick(e.latlng);
+                            } else {
+                                // Otherwise, select the preserve normally
+                                selectPreserve(p.name); 
+                            }
+                        });
                     }
                 });
             });
         }
 
-        function getMergedBufferGeoJSON() {
-            const analyzed = preserves.filter(p => p.pop !== null && p.pop >= 0);
+        function getMergedIsochroneGeoJSON() {
+            const analyzed = preserves.filter(p => p.pop !== null && p.pop >= 0 && p.isochrone);
             if (analyzed.length === 0) return null;
 
-            let features = [];
-            analyzed.forEach(p => {
-                p.geometries.forEach(geom => {
-                    let geojsonGeom = null;
-                    if (geom.rings) geojsonGeom = { type: "Polygon", coordinates: geom.rings };
-                    else if (geom.x !== undefined) geojsonGeom = { type: "Point", coordinates: [geom.x, geom.y] };
-                    else if (geom.paths) geojsonGeom = { type: "MultiLineString", coordinates: geom.paths };
-
-                    if (geojsonGeom) {
-                        try {
-                            let feature = turf.feature(geojsonGeom);
-                            let buffered = turf.buffer(feature, currentRadius, { units: 'miles' });
-                            if (buffered) features.push(buffered);
-                        } catch (e) { console.warn("Turf Buffer Skipped:", e); }
-                    }
-                });
-            });
-
-            if (features.length === 0) return null;
+            let features = analyzed.map(p => turf.feature(p.isochrone));
             let fc = turf.featureCollection(features);
             return turf.dissolve(fc);
         }
@@ -434,7 +468,8 @@
         function updateBufferVis() {
             bufferLayerGroup.clearLayers();
             
-            const unioned = getMergedBufferGeoJSON();
+            // Draw Merged analyzed regions
+            const unioned = getMergedIsochroneGeoJSON();
             if (unioned) {
                 L.geoJSON(unioned, {
                     style: {
@@ -448,40 +483,20 @@
                 }).addTo(bufferLayerGroup);
             }
 
+            // Draw highlighting for actively selected site
             if (selectedName) {
                 const preserve = preserves.find(p => p.name === selectedName);
-                if (preserve) {
-                    let selectedFeatures = [];
-                    preserve.geometries.forEach(geom => {
-                        let geojsonGeom = null;
-                        if (geom.rings) geojsonGeom = { type: "Polygon", coordinates: geom.rings };
-                        else if (geom.x !== undefined) geojsonGeom = { type: "Point", coordinates: [geom.x, geom.y] };
-                        else if (geom.paths) geojsonGeom = { type: "MultiLineString", coordinates: geom.paths };
-
-                        if (geojsonGeom) {
-                            try {
-                                let feature = turf.feature(geojsonGeom);
-                                let buffered = turf.buffer(feature, currentRadius, { units: 'miles' });
-                                if (buffered) selectedFeatures.push(buffered);
-                            } catch (e) {}
+                if (preserve && preserve.isochrone) {
+                    L.geoJSON(preserve.isochrone, {
+                        style: {
+                            color: '#059669',
+                            weight: 2,
+                            dashArray: '8, 8',
+                            fillColor: '#059669',
+                            fillOpacity: 0.2, 
+                            interactive: false
                         }
-                    });
-
-                    if (selectedFeatures.length > 0) {
-                        let fc = turf.featureCollection(selectedFeatures);
-                        let selectedUnioned = turf.dissolve(fc);
-                        
-                        L.geoJSON(selectedUnioned, {
-                            style: {
-                                color: '#059669',
-                                weight: 2,
-                                dashArray: '8, 8',
-                                fillColor: '#059669',
-                                fillOpacity: 0.2, 
-                                interactive: false
-                            }
-                        }).addTo(bufferLayerGroup);
-                    }
+                    }).addTo(bufferLayerGroup);
                 }
             }
         }
@@ -493,9 +508,9 @@
 
             renderTable();
             renderMapFeatures(); 
-            showPanel(preserve);
             updateBufferVis();
 
+            // Zoom to the preserve boundaries
             const bounds = L.latLngBounds();
             preserve.geometries.forEach(geom => {
                 const coords = esriToLeaflet(geom);
@@ -506,24 +521,103 @@
             });
 
             if (bounds.isValid()) map.flyToBounds(bounds, { padding: [120, 120], duration: 1 });
-            if (preserve.pop === null) calculatePop(preserve);
+
+            if (preserve.pop === null) {
+                // Instead of calculating right away, initiate "Click to Route" mode
+                isWaitingForStartClick = true;
+                pendingPreserveForRouting = preserve;
+                
+                document.getElementById('promptPreserveName').innerText = preserve.name;
+                document.getElementById('routingPrompt').classList.remove('hidden');
+                document.getElementById('map').classList.add('cursor-crosshair-map');
+                document.getElementById('infoPanel').classList.add('hidden'); // hide until analyzed
+            } else {
+                // Already analyzed, just show the panel
+                showPanel(preserve);
+            }
         }
 
-        async function calculatePop(preserve) {
+        function cancelInteractiveRouting() {
+            isWaitingForStartClick = false;
+            pendingPreserveForRouting = null;
+            document.getElementById('map').classList.remove('cursor-crosshair-map');
+            document.getElementById('routingPrompt').classList.add('hidden');
+        }
+
+        async function fetchIsochrone(preserve, customStartLatLng = null) {
+            let center;
+            
+            if (customStartLatLng) {
+                // Interactive manual click point
+                center = customStartLatLng;
+            } else {
+                // Fallback: Compute bounding box centroid for batching
+                const bounds = L.latLngBounds();
+                preserve.geometries.forEach(geom => {
+                    const coords = esriToLeaflet(geom);
+                    if (!coords) return;
+                    if (geom.rings) bounds.extend(L.polygon(coords).getBounds());
+                    else if (geom.paths) bounds.extend(L.polyline(coords).getBounds());
+                    else if (geom.x !== undefined) bounds.extend(coords);
+                });
+                center = bounds.getCenter();
+            }
+
+            const timeInSeconds = currentDriveTime * 60;
+            const body = {
+                locations: [[center.lng, center.lat]], // ORS requires [longitude, latitude]
+                range: [timeInSeconds]
+            };
+
+            const response = await fetch('https://api.openrouteservice.org/v2/isochrones/driving-car', {
+                method: 'POST',
+                headers: {
+                    'Authorization': ORS_API_KEY,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (!response.ok) throw new Error('Failed to fetch Isochrone');
+            const data = await response.json();
+            
+            if (data.features && data.features.length > 0) {
+                return data.features[0].geometry; // GeoJSON geometry 
+            }
+            throw new Error('Invalid Isochrone returned');
+        }
+
+        async function calculatePop(preserve, customStartLatLng = null) {
             if (preserve.loading || preserve.pop !== null) return;
             preserve.loading = true;
             renderTable();
 
             try {
-                const primaryGeom = preserve.geometries[0];
-                const stats = JSON.stringify([{ statisticType: "sum", onStatisticField: "P0010001", outStatisticFieldName: "total_pop" }]);
-                const params = new URLSearchParams();
+                // 1. Fetch the exact road-network drive time shape
+                const rawIsochroneGeom = await fetchIsochrone(preserve, customStartLatLng);
                 
-                params.append('geometry', JSON.stringify(primaryGeom));
-                // Automatically handle Polyline type for paths
-                params.append('geometryType', primaryGeom.rings ? 'esriGeometryPolygon' : (primaryGeom.paths ? 'esriGeometryPolyline' : 'esriGeometryPoint'));
+                // 2. Add a 500-foot buffer to catch adjacent homes/parcels off the main road
+                const bufferedFeature = turf.buffer(turf.feature(rawIsochroneGeom), 500, { units: 'feet' });
+                const isochroneGeom = bufferedFeature.geometry;
+                
+                preserve.isochrone = isochroneGeom;
+
+                // 3. Convert standard GeoJSON to Esri Rings format for the Census API
+                let esriRings = [];
+                if (isochroneGeom.type === 'Polygon') {
+                    esriRings = isochroneGeom.coordinates;
+                } else if (isochroneGeom.type === 'MultiPolygon') {
+                    isochroneGeom.coordinates.forEach(poly => esriRings.push(...poly));
+                }
+
+                const unionedEsri = { rings: esriRings, spatialReference: { wkid: 4326 } };
+                const stats = JSON.stringify([{ statisticType: "sum", onStatisticField: "P0010001", outStatisticFieldName: "total_pop" }]);
+                
+                const params = new URLSearchParams();
+                params.append('geometry', JSON.stringify(unionedEsri));
+                params.append('geometryType', 'esriGeometryPolygon');
                 params.append('spatialRel', 'esriSpatialRelIntersects');
-                params.append('distance', currentRadius.toString());
+                params.append('distance', '0'); // Distance 0 because the isochrone IS the shape
                 params.append('units', 'esriSRUnit_StatuteMile');
                 params.append('outStatistics', stats);
                 params.append('f', 'json');
@@ -532,9 +626,10 @@
                 const response = await fetch(`${CENSUS_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() });
                 const data = await response.json();
                 if (data.error) throw new Error(data.error.message);
+                
                 preserve.pop = data.features?.[0]?.attributes?.total_pop || 0;
             } catch (err) {
-                console.error("Census Query Failed:", err);
+                console.error("Analysis Failed:", err);
                 preserve.pop = -1;
             } finally {
                 preserve.loading = false;
@@ -550,6 +645,9 @@
 
         async function startBatchAnalysis(targetList) {
             if (isBatching || targetList.length === 0) return;
+
+            // Clear any active manual routing prompts if user triggers batch
+            cancelInteractiveRouting();
 
             isBatching = true;
             const btnAll = document.getElementById('calcAll');
@@ -568,6 +666,8 @@
                 count++;
                 btnAll.innerHTML = `<i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> ${count}/${total}`;
                 lucide.createIcons();
+                
+                // Call calculate without custom origin to trigger automatic centroid fallback
                 await calculatePop(p);
                 
                 if (count % 3 === 0) { 
@@ -575,6 +675,10 @@
                     updateStats(); 
                     updateBufferVis();
                 }
+
+                // Important: ORS Free Tier has a limit of 40 requests / minute. 
+                // We add a 1.5s delay between requests to stay safely under limits.
+                await new Promise(r => setTimeout(r, 1500));
             }
 
             isBatching = false;
@@ -607,7 +711,7 @@
         }
 
         async function updateTrueAggregate() {
-            const unioned = getMergedBufferGeoJSON();
+            const unioned = getMergedIsochroneGeoJSON();
             if (!unioned) {
                 document.getElementById('totalReach').innerText = "0";
                 return;
@@ -632,7 +736,6 @@
                 });
 
                 const unionedEsri = { rings: allRings, spatialReference: { wkid: 4326 } };
-
                 const stats = JSON.stringify([{ statisticType: "sum", onStatisticField: "P0010001", outStatisticFieldName: "total_pop" }]);
                 const params = new URLSearchParams();
                 params.append('geometry', JSON.stringify(unionedEsri));
@@ -672,7 +775,7 @@
             const deduplicatedReach = parseInt(deduplicatedReachStr.replace(/,/g, '')) || 0;
 
             let csv = `"Overall Deduplicated Population Reach",,${deduplicatedReach}\n\n`;
-            csv += `Preserve Name,County,Population within ${currentRadius} Miles\n`;
+            csv += `Preserve Name,County,Population within ${currentDriveTime} Mins\n`;
             
             analyzed.forEach(p => {
                 csv += `"${p.name.replace(/"/g, '""')}","${p.county}",${p.pop}\n`;
@@ -682,7 +785,7 @@
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
             link.setAttribute("href", url);
-            link.setAttribute("download", `ltc_census_impact_${currentRadius}mi.csv`);
+            link.setAttribute("download", `ltc_census_impact_${currentDriveTime}mins.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
@@ -693,7 +796,7 @@
             const panel = document.getElementById('infoPanel');
             document.getElementById('panelName').innerText = p.name;
             document.getElementById('panelCounty').innerText = p.county;
-            document.getElementById('panelPopLabel').innerText = `${currentRadius}-Mile Population`;
+            document.getElementById('panelPopLabel').innerText = `${currentDriveTime}-Min Drive Pop`;
             document.getElementById('panelPop').innerText = p.loading ? "Analyzing..." : (p.pop === -1 ? "Error" : (p.pop === null ? "..." : p.pop.toLocaleString()));
             panel.classList.remove('hidden');
         }
@@ -730,7 +833,10 @@
         }
 
         function clearAllData() {
-            preserves.forEach(p => p.pop = null);
+            cancelInteractiveRouting();
+            if (interactiveStartMarker) map.removeLayer(interactiveStartMarker);
+            
+            preserves.forEach(p => { p.pop = null; p.isochrone = null; });
             selectedName = null;
             document.getElementById('infoPanel').classList.add('hidden');
             updateBufferVis();
@@ -748,18 +854,19 @@
             document.getElementById('calcAll').addEventListener('click', () => startBatchAnalysis(preserves.filter(p => p.pop === null)));
             document.getElementById('calcWindow').addEventListener('click', analyzeVisible);
             
+            document.getElementById('cancelRouting').addEventListener('click', cancelInteractiveRouting);
+
             document.getElementById('exportCSV').addEventListener('click', exportCSV);
             document.getElementById('stopBatch').addEventListener('click', () => isBatching = false);
             document.getElementById('clearAllBtn').addEventListener('click', clearAllData);
             document.getElementById('closePanel').addEventListener('click', () => { document.getElementById('infoPanel').classList.add('hidden'); selectedName = null; updateBufferVis(); renderTable(); renderMapFeatures(); });
             
-            document.getElementById('radiusSlider').addEventListener('input', (e) => {
-                currentRadius = parseInt(e.target.value);
-                document.getElementById('radiusDisplay').innerText = `${currentRadius} Miles`;
-                updateBufferVis();
+            document.getElementById('driveTimeSlider').addEventListener('input', (e) => {
+                currentDriveTime = parseInt(e.target.value);
+                document.getElementById('driveTimeDisplay').innerText = `${currentDriveTime} Minutes`;
             });
 
-            document.getElementById('radiusSlider').addEventListener('change', (e) => {
+            document.getElementById('driveTimeSlider').addEventListener('change', (e) => {
                 clearAllData();
             });
 
